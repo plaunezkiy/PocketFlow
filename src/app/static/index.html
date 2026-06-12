@@ -1,0 +1,106 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Flow UI</title>
+    <style>
+      body { font-family: Arial, sans-serif; padding: 1rem; }
+      .node-list { margin-bottom: 1rem; }
+      .schema { white-space: pre-wrap; background: #f6f8fa; padding: 0.5rem; border-radius: 4px; }
+      label { display:block; margin-top:0.5rem }
+    </style>
+  </head>
+  <body>
+    <h1>Flow UI</h1>
+    <div class="node-list">
+      <strong>Nodes</strong>
+      <ul id="nodes"></ul>
+    </div>
+
+    <div id="node-area" style="display:none">
+      <h2 id="node-name"></h2>
+      <div>
+        <strong>Input</strong>
+        <div id="input-form"></div>
+      </div>
+      <div style="margin-top:1rem">
+        <button id="run">Run</button>
+      </div>
+      <h3>Output</h3>
+      <pre id="output" class="schema"></pre>
+    </div>
+
+    <script>
+      function getProxyBasePath() {
+        const path = window.location.pathname;
+        const match = path.match(/^(\/proxy\/\d+)/);
+        return match ? match[1] : '';
+      }
+
+      function apiUrl(route) {
+        const base = getProxyBasePath();
+        return base + route;
+      }
+
+      async function loadNodes(){
+        const res = await fetch(apiUrl('/nodes'));
+        const nodes = await res.json();
+        const ul = document.getElementById('nodes');
+        ul.innerHTML = '';
+        nodes.forEach(n => {
+          const li = document.createElement('li');
+          const btn = document.createElement('button');
+          btn.textContent = n;
+          btn.onclick = () => selectNode(n);
+          li.appendChild(btn);
+          ul.appendChild(li);
+        });
+      }
+
+      let currentNode = null;
+      let currentSchema = null;
+
+      async function selectNode(name){
+        currentNode = name;
+        document.getElementById('node-area').style.display = '';
+        document.getElementById('node-name').textContent = name;
+        const res = await fetch(apiUrl(`/schema/${name}`));
+        currentSchema = await res.json();
+        buildForm(currentSchema.in);
+      }
+
+      function buildForm(schema){
+        const area = document.getElementById('input-form');
+        area.innerHTML = '';
+        const props = schema.properties || {};
+        for(const [key, desc] of Object.entries(props)){
+          const label = document.createElement('label');
+          label.textContent = key + (desc.type ? ` (${desc.type})` : '');
+          const input = document.createElement('input');
+          input.name = key;
+          input.type = desc.type === 'integer' ? 'number' : 'text';
+          label.appendChild(input);
+          area.appendChild(label);
+        }
+      }
+
+      document.getElementById('run').addEventListener('click', async ()=>{
+        if(!currentNode) return;
+        const form = document.getElementById('input-form');
+        const data = {};
+        for (const el of form.querySelectorAll('input')){
+          const val = el.value;
+          if(val === '') continue;
+          const type = el.type;
+          data[el.name] = type === 'number' ? Number(val) : val;
+        }
+        const res = await fetch(apiUrl(`/run/${currentNode}`), {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(data)});
+        const out = await res.json();
+        document.getElementById('output').textContent = JSON.stringify(out, null, 2);
+      });
+
+      loadNodes();
+    </script>
+  </body>
+</html>
