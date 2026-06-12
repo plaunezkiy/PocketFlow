@@ -26,6 +26,24 @@ class IncNode(Node[LenOut, LenOut]):
         return LenOut.model_validate({"length": data.length + 1})
 
 
+class LoadDocInput(BaseModel):
+    doc_path: str
+
+
+class LoadDocOutput(BaseModel):
+    content: str
+
+
+class LoadDocNode(Node[LoadDocInput, LoadDocOutput]):
+    in_model = LoadDocInput
+    out_model = LoadDocOutput
+
+    def run(self, data: LoadDocInput) -> LoadDocOutput:
+        with open(data.doc_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        return LoadDocOutput(content=content)
+
+
 def demo():
     flow = Flow()
     # register nodes

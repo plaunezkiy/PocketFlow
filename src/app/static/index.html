@@ -5,33 +5,100 @@
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>Flow UI</title>
     <style>
-      body { font-family: Arial, sans-serif; padding: 1rem; }
-      .node-list { margin-bottom: 1rem; }
-      .schema { white-space: pre-wrap; background: #f6f8fa; padding: 0.5rem; border-radius: 4px; }
-      label { display:block; margin-top:0.5rem }
+      :root {
+        color-scheme: light;
+        font-family: Inter, system-ui, sans-serif;
+        background: #f3f5f7;
+        color: #111827;
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; padding: 1.5rem; }
+      h1 { margin: 0 0 1rem; font-size: 1.8rem; }
+      .page { display: grid; gap: 1rem; grid-template-columns: minmax(200px, 260px) minmax(320px, 1fr); }
+      .panel { background: white; border-radius: 16px; box-shadow: 0 12px 32px rgba(15,23,42,.08); padding: 1rem 1.25rem; }
+      .panel h2 { margin-top: 0; font-size: 1.1rem; }
+      .node-list ul, .flow-list ul { list-style: none; padding: 0; margin: 0; }
+      .node-list li, .flow-step { display: flex; justify-content: space-between; gap: .5rem; margin-bottom: .5rem; }
+      button { border: 1px solid #d1d5db; border-radius: 10px; background: white; padding: 0.6rem 0.85rem; color: #111827; cursor: pointer; font: inherit; }
+      button.primary { background: #2563eb; color: white; border-color: transparent; }
+      button.danger { background: #ef4444; color: white; }
+      button.small { padding: 0.35rem 0.6rem; font-size: 0.92rem; }
+      button:disabled { opacity: 0.5; cursor: default; }
+      .chip { border: 1px solid #e5e7eb; border-radius: 999px; padding: 0.5rem 0.75rem; display: inline-flex; align-items: center; gap: 0.5rem; background: #f8fafc; }
+      .field { margin-top: 0.75rem; }
+      textarea { width: 100%; min-height: 8rem; border: 1px solid #d1d5db; border-radius: 12px; padding: 0.9rem; font-family: ui-monospace, SFMono-Regular, monospace; font-size: 0.95rem; }
+      pre { background: #111827; color: #f8fafc; padding: 1rem; border-radius: 16px; overflow-x: auto; margin: 0; }
+      .grid { display: grid; gap: 1rem; }
+      .grid-2 { grid-template-columns: 1fr 1fr; }
+      .meta { color: #6b7280; font-size: 0.95rem; margin-bottom: 0.75rem; }
+      .error { color: #b91c1c; margin-top: 0.75rem; }
     </style>
   </head>
   <body>
     <h1>Flow UI</h1>
-    <div class="node-list">
-      <strong>Nodes</strong>
-      <ul id="nodes"></ul>
-    </div>
+    <div class="page">
+      <section class="panel">
+        <h2>Node library</h2>
+        <p class="meta">Click a node to add it to your flow.</p>
+        <div class="node-list">
+          <ul id="nodes"></ul>
+        </div>
+      </section>
 
-    <div id="node-area" style="display:none">
-      <h2 id="node-name"></h2>
-      <div>
-        <strong>Input</strong>
-        <div id="input-form"></div>
-      </div>
-      <div style="margin-top:1rem">
-        <button id="run">Run</button>
-      </div>
-      <h3>Output</h3>
-      <pre id="output" class="schema"></pre>
+      <section class="panel">
+        <div class="grid">
+          <div>
+            <h2>Flow builder</h2>
+            <p class="meta">Build a chain of nodes to execute in sequence.</p>
+            <div class="flow-list">
+              <ul id="flow"></ul>
+            </div>
+            <button id="run-flow" class="primary" style="margin-top:1rem;">Run flow</button>
+          </div>
+
+          <div>
+            <h2>Payload</h2>
+            <p class="meta">Enter initial JSON for the first node.</p>
+            <button id="fill-payload" class="small" style="margin-bottom:0.75rem;">Use selected step schema</button>
+            <textarea id="payload">{ "text": "hello elliott and julia" }</textarea>
+            <div id="payload-error" class="error" style="display:none"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Node details</h2>
+        <p class="meta" id="details-meta">Select a step to inspect its schema.</p>
+        <div id="details-content">
+          <div class="grid grid-2">
+            <div>
+              <h3>Input schema</h3>
+              <pre id="input-schema">No node selected.</pre>
+            </div>
+            <div>
+              <h3>Output schema</h3>
+              <pre id="output-schema">No node selected.</pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" style="grid-column: span 2;">
+        <h2>Execution result</h2>
+        <p class="meta">See the final output and each step’s result.</p>
+        <pre id="result">Run a flow to see results here.</pre>
+      </section>
     </div>
 
     <script>
+      const state = {
+        nodes: [],
+        flow: [],
+        selectedIndex: null,
+        selectedSchema: null,
+        error: null,
+      };
+
       function getProxyBasePath() {
         const path = window.location.pathname;
         const match = path.match(/^(\/proxy\/\d+)/);
@@ -39,67 +106,180 @@
       }
 
       function apiUrl(route) {
-        const base = getProxyBasePath();
-        return base + route;
+        return getProxyBasePath() + route;
       }
 
-      async function loadNodes(){
+      async function loadNodes() {
         const res = await fetch(apiUrl('/nodes'));
-        const nodes = await res.json();
+        state.nodes = await res.json();
+        renderNodeLibrary();
+        renderFlow();
+      }
+
+      function renderNodeLibrary() {
         const ul = document.getElementById('nodes');
         ul.innerHTML = '';
-        nodes.forEach(n => {
+        state.nodes.forEach(name => {
           const li = document.createElement('li');
           const btn = document.createElement('button');
-          btn.textContent = n;
-          btn.onclick = () => selectNode(n);
+          btn.textContent = name;
+          btn.onclick = () => addNodeToFlow(name);
           li.appendChild(btn);
           ul.appendChild(li);
         });
       }
 
-      let currentNode = null;
-      let currentSchema = null;
+      function addNodeToFlow(name) {
+        state.flow.push(name);
+        state.selectedIndex = state.flow.length - 1;
+        renderFlow();
+        loadSelectedSchema();
+      }
 
-      async function selectNode(name){
-        currentNode = name;
-        document.getElementById('node-area').style.display = '';
-        document.getElementById('node-name').textContent = name;
+      function removeNode(index) {
+        state.flow.splice(index, 1);
+        if (state.selectedIndex >= state.flow.length) {
+          state.selectedIndex = state.flow.length - 1;
+        }
+        renderFlow();
+        loadSelectedSchema();
+      }
+
+      function selectStep(index) {
+        state.selectedIndex = index;
+        loadSelectedSchema();
+        renderFlow();
+      }
+
+      async function loadSelectedSchema() {
+        if (state.selectedIndex === null || state.selectedIndex < 0 || state.selectedIndex >= state.flow.length) {
+          state.selectedSchema = null;
+          renderDetails();
+          return;
+        }
+        const name = state.flow[state.selectedIndex];
         const res = await fetch(apiUrl(`/schema/${name}`));
-        currentSchema = await res.json();
-        buildForm(currentSchema.in);
+        state.selectedSchema = await res.json();
+        renderDetails();
       }
 
-      function buildForm(schema){
-        const area = document.getElementById('input-form');
-        area.innerHTML = '';
-        const props = schema.properties || {};
-        for(const [key, desc] of Object.entries(props)){
-          const label = document.createElement('label');
-          label.textContent = key + (desc.type ? ` (${desc.type})` : '');
-          const input = document.createElement('input');
-          input.name = key;
-          input.type = desc.type === 'integer' ? 'number' : 'text';
-          label.appendChild(input);
-          area.appendChild(label);
+      function renderFlow() {
+        const ul = document.getElementById('flow');
+        ul.innerHTML = '';
+        state.flow.forEach((name, index) => {
+          const li = document.createElement('li');
+          li.className = 'flow-step';
+          const label = document.createElement('span');
+          label.textContent = `${index + 1}. ${name}`;
+          label.style.cursor = 'pointer';
+          label.onclick = () => selectStep(index);
+          if (state.selectedIndex === index) {
+            label.style.fontWeight = '600';
+          }
+          const actions = document.createElement('span');
+          const remove = document.createElement('button');
+          remove.textContent = 'Remove';
+          remove.className = 'small danger';
+          remove.onclick = () => removeNode(index);
+          actions.appendChild(remove);
+          li.appendChild(label);
+          li.appendChild(actions);
+          ul.appendChild(li);
+        });
+        if (!state.flow.length) {
+          const empty = document.createElement('p');
+          empty.textContent = 'Add nodes to build a flow.';
+          ul.appendChild(empty);
+          state.selectedIndex = null;
+          state.selectedSchema = null;
+          renderDetails();
         }
       }
 
-      document.getElementById('run').addEventListener('click', async ()=>{
-        if(!currentNode) return;
-        const form = document.getElementById('input-form');
-        const data = {};
-        for (const el of form.querySelectorAll('input')){
-          const val = el.value;
-          if(val === '') continue;
-          const type = el.type;
-          data[el.name] = type === 'number' ? Number(val) : val;
+      function renderDetails() {
+        const inputSchema = document.getElementById('input-schema');
+        const outputSchema = document.getElementById('output-schema');
+        const meta = document.getElementById('details-meta');
+        const fillButton = document.getElementById('fill-payload');
+        if (!state.selectedSchema) {
+          inputSchema.textContent = 'No node selected.';
+          outputSchema.textContent = 'No node selected.';
+          meta.textContent = 'Select a step in the flow to inspect its schema.';
+          fillButton.disabled = true;
+          return;
         }
-        const res = await fetch(apiUrl(`/run/${currentNode}`), {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(data)});
-        const out = await res.json();
-        document.getElementById('output').textContent = JSON.stringify(out, null, 2);
-      });
+        inputSchema.textContent = JSON.stringify(state.selectedSchema.in, null, 2);
+        outputSchema.textContent = JSON.stringify(state.selectedSchema.out, null, 2);
+        meta.textContent = `Showing schema for: ${state.flow[state.selectedIndex]}`;
+        fillButton.disabled = false;
+      }
 
+      function displayResult(value) {
+        document.getElementById('result').textContent = JSON.stringify(value, null, 2);
+      }
+
+      function sampleValueForSchema(schema) {
+        if (!schema || typeof schema !== 'object') return null;
+        if (schema.const !== undefined) return schema.const;
+        if (schema.default !== undefined) return schema.default;
+        switch (schema.type) {
+          case 'string': return schema.examples?.[0] ?? schema.format === 'uri' ? 'https://example.com' : 'example';
+          case 'integer': return schema.examples?.[0] ?? 0;
+          case 'number': return schema.examples?.[0] ?? 0.0;
+          case 'boolean': return schema.examples?.[0] ?? false;
+          case 'array': return schema.items ? [sampleValueForSchema(schema.items)] : [];
+          case 'object': {
+            const obj = {};
+            const props = schema.properties || {};
+            Object.entries(props).forEach(([key, child]) => {
+              obj[key] = sampleValueForSchema(child);
+            });
+            return obj;
+          }
+          default:
+            return null;
+        }
+      }
+
+      function setPayloadFromSchema() {
+        if (!state.selectedSchema) return;
+        const sample = sampleValueForSchema(state.selectedSchema.in);
+        document.getElementById('payload').value = JSON.stringify(sample, null, 2);
+      }
+
+      async function runFlow() {
+        const payloadText = document.getElementById('payload').value;
+        const errorEl = document.getElementById('payload-error');
+        errorEl.style.display = 'none';
+        let payload;
+        try {
+          payload = JSON.parse(payloadText);
+        } catch (error) {
+          errorEl.textContent = 'Invalid JSON payload.';
+          errorEl.style.display = 'block';
+          return;
+        }
+        if (!state.flow.length) {
+          errorEl.textContent = 'Add at least one node to the flow.';
+          errorEl.style.display = 'block';
+          return;
+        }
+        const response = await fetch(apiUrl('/flow/run'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ nodes: state.flow, payload }),
+        });
+        const body = await response.json();
+        if (!response.ok) {
+          errorEl.textContent = body.detail ? JSON.stringify(body.detail, null, 2) : 'Flow execution failed.';
+          errorEl.style.display = 'block';
+          return;
+        }
+        displayResult(body);
+      }
+
+      document.getElementById('run-flow').addEventListener('click', runFlow);
+      document.getElementById('fill-payload').addEventListener('click', setPayloadFromSchema);
       loadNodes();
     </script>
   </body>

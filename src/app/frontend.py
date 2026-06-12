@@ -5,7 +5,7 @@ from pydantic import BaseModel, ValidationError
 from typing import Dict, Any
 from pathlib import Path
 
-from src.lib.example_flow import LenNode, IncNode
+from src.lib.example_flow import LenNode, IncNode, LoadDocNode
 
 app = FastAPI(title="Flow UI")
 
@@ -21,6 +21,7 @@ async def root():
 _NODES: Dict[str, Any] = {
     "len": LenNode(),
     "inc": IncNode(),
+    "load_doc": LoadDocNode(),
 }
 
 
