@@ -1,36 +1,78 @@
-from typing import Generic, TypeVar, Any, List, Dict, Tuple, Callable
-from pydantic import BaseModel
+import importlib
+import pkgutil
+from typing import Any, List, Dict, Tuple, Callable, Optional
 
-InT = TypeVar("InT", bound=BaseModel)
-OutT = TypeVar("OutT", bound=BaseModel)
+# Global registry of nodes
+_NODE_REGISTRY: Dict[str, "Node"] = {}
 
 
-class Node(Generic[InT, OutT]):
-    """Generic Node with pydantic models for input and output."""
-    in_model: type[InT]
-    out_model: type[OutT]
+def register_node(name: str):
+    """Decorator to register a node singleton by name."""
+    def decorator(node_class):
+        instance = node_class()
+        _NODE_REGISTRY[name] = instance
+        return node_class
+    return decorator
 
-    def run(self, data: InT) -> OutT:
+
+def get_node(name: str) -> "Node":
+    """Retrieve a registered node by name."""
+    if name not in _NODE_REGISTRY:
+        raise KeyError(f"Node '{name}' not registered")
+    return _NODE_REGISTRY[name]
+
+
+def list_nodes() -> List[str]:
+    """List all registered node names."""
+    return list(_NODE_REGISTRY.keys())
+
+
+def list_nodes_info() -> List[Dict[str, Any]]:
+    """List registered nodes with optional metadata."""
+    return [
+        {"name": name, "schema": node.schema()}
+        for name, node in _NODE_REGISTRY.items()
+    ]
+
+
+def discover_nodes(package_name: str = "src.nodes") -> List[str]:
+    """Discover node modules under a package and import them to register nodes."""
+    package = importlib.import_module(package_name)
+    if not hasattr(package, "__path__"):
+        raise ValueError(f"Package {package_name} is not a package")
+
+    for finder, module_name, _ in pkgutil.walk_packages(package.__path__, prefix=package.__name__ + "."):
+        importlib.import_module(module_name)
+
+    return list_nodes()
+
+
+class Node:
+    """Base stateless node: reads from context, transforms, returns modified context."""
+
+    def run(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute the node on the shared context.
+        
+        Args:
+            context: shared mutable context dict
+        
+        Returns:
+            the modified context (may be the same object)
+        """
         raise NotImplementedError
 
-    def __call__(self, raw_input: Any) -> OutT:
-        in_obj = self.in_model.model_validate(raw_input)
-        out_obj = self.run(in_obj)
-        return self.out_model.model_validate(out_obj)
+    def schema(self) -> Optional[Dict[str, Any]]:
+        """Return optional node schema metadata for UI inspection."""
+        return None
 
 
 class Flow:
-    """Flow that supports conditional transitions between nodes.
-
-    Use `add()` to register nodes (returns an index), and `connect()` to
-    create conditional transitions from one node to another. Predicates
-    receive the output model instance returned by the source node.
-    """
+    """Flow that chains nodes and supports conditional transitions via predicates."""
 
     def __init__(self) -> None:
         self.nodes: List[Node] = []
         # transitions[from_index] = list of (predicate, to_index)
-        self.transitions: Dict[int, List[Tuple[Callable[[Any], bool], int]]] = {}
+        self.transitions: Dict[int, List[Tuple[Callable[[Dict[str, Any]], bool], int]]] = {}
 
     def add(self, node: Node) -> int:
         """Register a node and return its index."""
@@ -38,49 +80,82 @@ class Flow:
         self.nodes.append(node)
         return idx
 
-    def connect(self, from_idx: int, to_idx: int, predicate: Callable[[Any], bool]) -> None:
-        """Connect two nodes with a predicate that selects the transition.
-
-        Raises TypeError if the output type of `from_idx` is incompatible
-        with the input type of `to_idx`.
+    def connect(self, from_idx: int, to_idx: int, predicate: Callable[[Dict[str, Any]], bool]) -> None:
+        """Connect two nodes with a predicate that evaluates the full context.
+        
+        Args:
+            from_idx: source node index
+            to_idx: target node index
+            predicate: function(context: dict) -> bool to select the transition
         """
         if from_idx < 0 or from_idx >= len(self.nodes):
             raise IndexError("from_idx out of range")
         if to_idx < 0 or to_idx >= len(self.nodes):
             raise IndexError("to_idx out of range")
 
-        from_out = self.nodes[from_idx].out_model
-        to_in = self.nodes[to_idx].in_model
-        try:
-            compatible = from_out is to_in or issubclass(from_out, to_in) or issubclass(to_in, from_out)
-        except Exception:
-            compatible = from_out is to_in
-        if not compatible:
-            raise TypeError(f"Incompatible transition: {from_out} -> {to_in}")
-
         self.transitions.setdefault(from_idx, []).append((predicate, to_idx))
 
-    def run(self, raw_input: Any) -> Any:
+    def run(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute the flow on the shared context.
+        
+        Args:
+            context: initial context dict (will be mutated)
+        
+        Returns:
+            the final context after all nodes execute
+        """
+        result, _trace = self.run_with_trace(context)
+        return result
+
+    def run_with_trace(self, context: Dict[str, Any]) -> tuple[Dict[str, Any], List[Dict[str, Any]]]:
+        """Execute the flow and return execution trace for each node."""
         if not self.nodes:
             raise RuntimeError("Flow has no nodes")
 
+        trace: List[Dict[str, Any]] = []
         idx = 0
-        current = raw_input
+        step = 0
         while idx is not None:
             node = self.nodes[idx]
-            current = node(current)
+            before = context.copy()
+            after = node.run(context)
+            trace.append({
+                "step": step,
+                "node": type(node).__name__,
+                "name": self.nodes[idx].__class__.__name__,
+                "before": before,
+                "after": after.copy() if isinstance(after, dict) else after,
+                "idx": idx,
+            })
+            context = after
 
-            # evaluate transitions for this node in insertion order
             next_idx = None
             for pred, target in self.transitions.get(idx, []):
                 try:
-                    ok = bool(pred(current))
+                    ok = bool(pred(context))
                 except Exception:
                     ok = False
                 if ok:
                     next_idx = target
                     break
 
-            idx = next_idx
+            if next_idx is None and idx + 1 < len(self.nodes):
+                next_idx = idx + 1
 
-        return current
+            idx = next_idx
+            step += 1
+
+        return context, trace
+
+    @classmethod
+    def from_node_names(cls, names: List[str]) -> "Flow":
+        """Construct a flow from an ordered list of registered node names."""
+        flow = cls()
+        for name in names:
+            flow.add(get_node(name))
+        return flow
+
+
+def build_flow(node_names: List[str]) -> Flow:
+    """Build a flow from a list of registered node names."""
+    return Flow.from_node_names(node_names)

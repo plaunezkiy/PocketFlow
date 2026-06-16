@@ -14,24 +14,23 @@
       * { box-sizing: border-box; }
       body { margin: 0; padding: 1.5rem; }
       h1 { margin: 0 0 1rem; font-size: 1.8rem; }
-      .page { display: grid; gap: 1rem; grid-template-columns: minmax(200px, 260px) minmax(320px, 1fr); }
+      .page { display: grid; gap: 1rem; grid-template-columns: minmax(200px, 260px) 1fr; }
       .panel { background: white; border-radius: 16px; box-shadow: 0 12px 32px rgba(15,23,42,.08); padding: 1rem 1.25rem; }
       .panel h2 { margin-top: 0; font-size: 1.1rem; }
       .node-list ul, .flow-list ul { list-style: none; padding: 0; margin: 0; }
       .node-list li, .flow-step { display: flex; justify-content: space-between; gap: .5rem; margin-bottom: .5rem; }
+      .flow-step.selected { background: #eef6ff; border-radius: 12px; padding: 0.75rem; }
       button { border: 1px solid #d1d5db; border-radius: 10px; background: white; padding: 0.6rem 0.85rem; color: #111827; cursor: pointer; font: inherit; }
       button.primary { background: #2563eb; color: white; border-color: transparent; }
       button.danger { background: #ef4444; color: white; }
       button.small { padding: 0.35rem 0.6rem; font-size: 0.92rem; }
       button:disabled { opacity: 0.5; cursor: default; }
-      .chip { border: 1px solid #e5e7eb; border-radius: 999px; padding: 0.5rem 0.75rem; display: inline-flex; align-items: center; gap: 0.5rem; background: #f8fafc; }
-      .field { margin-top: 0.75rem; }
-      textarea { width: 100%; min-height: 8rem; border: 1px solid #d1d5db; border-radius: 12px; padding: 0.9rem; font-family: ui-monospace, SFMono-Regular, monospace; font-size: 0.95rem; }
-      pre { background: #111827; color: #f8fafc; padding: 1rem; border-radius: 16px; overflow-x: auto; margin: 0; }
-      .grid { display: grid; gap: 1rem; }
-      .grid-2 { grid-template-columns: 1fr 1fr; }
       .meta { color: #6b7280; font-size: 0.95rem; margin-bottom: 0.75rem; }
+      textarea { width: 100%; min-height: 6rem; border: 1px solid #d1d5db; border-radius: 12px; padding: 0.9rem; font-family: ui-monospace, SFMono-Regular, monospace; font-size: 0.95rem; }
+      pre { background: #111827; color: #f8fafc; padding: 1rem; border-radius: 16px; overflow-x: auto; margin: 0; font-size: 0.9rem; }
       .error { color: #b91c1c; margin-top: 0.75rem; }
+      .section { margin-bottom: 1.5rem; }
+      .section:last-child { margin-bottom: 0; }
     </style>
   </head>
   <body>
@@ -54,36 +53,21 @@
               <ul id="flow"></ul>
             </div>
             <button id="run-flow" class="primary" style="margin-top:1rem;">Run flow</button>
+            <button id="view-schema" class="small" disabled style="margin-top:0.75rem;">Show selected node schema</button>
+            <button id="populate-context" class="small" disabled style="margin-top:0.75rem; margin-left:0.5rem;">Prepopulate context</button>
+            <pre id="schema" style="margin-top:0.75rem; min-height: 8rem; background:#f9fafb; color:#111827; border:1px solid #d1d5db; padding:1rem; border-radius:12px; overflow-x:auto;">Select a node in the flow to view schema.</pre>
           </div>
 
           <div>
-            <h2>Payload</h2>
-            <p class="meta">Enter initial JSON for the first node.</p>
-            <button id="fill-payload" class="small" style="margin-bottom:0.75rem;">Use selected step schema</button>
-            <textarea id="payload">{ "text": "hello elliott and julia" }</textarea>
-            <div id="payload-error" class="error" style="display:none"></div>
+            <h2>Shared context</h2>
+            <p class="meta">JSON object passed and modified through the flow.</p>
+            <textarea id="context">{ "text": "hello elliott and julia" }</textarea>
+            <div id="error" class="error" style="display:none"></div>
           </div>
         </div>
       </section>
 
       <section class="panel">
-        <h2>Node details</h2>
-        <p class="meta" id="details-meta">Select a step to inspect its schema.</p>
-        <div id="details-content">
-          <div class="grid grid-2">
-            <div>
-              <h3>Input schema</h3>
-              <pre id="input-schema">No node selected.</pre>
-            </div>
-            <div>
-              <h3>Output schema</h3>
-              <pre id="output-schema">No node selected.</pre>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section class="panel" style="grid-column: span 2;">
         <h2>Execution result</h2>
         <p class="meta">See the final output and each step’s result.</p>
         <pre id="result">Run a flow to see results here.</pre>
@@ -94,9 +78,8 @@
       const state = {
         nodes: [],
         flow: [],
-        selectedIndex: null,
-        selectedSchema: null,
-        error: null,
+        selectedStep: null,
+        schemaVisible: false,
       };
 
       function getProxyBasePath() {
@@ -119,11 +102,11 @@
       function renderNodeLibrary() {
         const ul = document.getElementById('nodes');
         ul.innerHTML = '';
-        state.nodes.forEach(name => {
+        state.nodes.forEach(node => {
           const li = document.createElement('li');
           const btn = document.createElement('button');
-          btn.textContent = name;
-          btn.onclick = () => addNodeToFlow(name);
+          btn.textContent = node.name;
+          btn.onclick = () => addNodeToFlow(node.name);
           li.appendChild(btn);
           ul.appendChild(li);
         });
@@ -131,103 +114,132 @@
 
       function addNodeToFlow(name) {
         state.flow.push(name);
-        state.selectedIndex = state.flow.length - 1;
         renderFlow();
-        loadSelectedSchema();
       }
 
       function removeNode(index) {
+        if (state.selectedStep === index) {
+          state.selectedStep = null;
+        } else if (state.selectedStep !== null && state.selectedStep > index) {
+          state.selectedStep -= 1;
+        }
         state.flow.splice(index, 1);
-        if (state.selectedIndex >= state.flow.length) {
-          state.selectedIndex = state.flow.length - 1;
-        }
-        renderFlow();
-        loadSelectedSchema();
-      }
-
-      function selectStep(index) {
-        state.selectedIndex = index;
-        loadSelectedSchema();
         renderFlow();
       }
 
-      async function loadSelectedSchema() {
-        if (state.selectedIndex === null || state.selectedIndex < 0 || state.selectedIndex >= state.flow.length) {
-          state.selectedSchema = null;
-          renderDetails();
-          return;
-        }
-        const name = state.flow[state.selectedIndex];
-        const res = await fetch(apiUrl(`/schema/${name}`));
-        state.selectedSchema = await res.json();
-        renderDetails();
+      function selectFlowStep(index) {
+        state.selectedStep = index;
+        renderFlow();
       }
 
       function renderFlow() {
         const ul = document.getElementById('flow');
         ul.innerHTML = '';
+        if (!state.flow.length) {
+          const empty = document.createElement('p');
+          empty.textContent = 'Add nodes to build a flow.';
+          ul.appendChild(empty);
+          renderSchema();
+          return;
+        }
+
         state.flow.forEach((name, index) => {
           const li = document.createElement('li');
           li.className = 'flow-step';
+          if (state.selectedStep === index) {
+            li.classList.add('selected');
+          }
+
           const label = document.createElement('span');
           label.textContent = `${index + 1}. ${name}`;
-          label.style.cursor = 'pointer';
-          label.onclick = () => selectStep(index);
-          if (state.selectedIndex === index) {
-            label.style.fontWeight = '600';
-          }
+
           const actions = document.createElement('span');
+          const select = document.createElement('button');
+          select.textContent = 'Select';
+          select.className = 'small';
+          select.onclick = () => selectFlowStep(index);
+          actions.appendChild(select);
+
           const remove = document.createElement('button');
           remove.textContent = 'Remove';
           remove.className = 'small danger';
           remove.onclick = () => removeNode(index);
           actions.appendChild(remove);
+
           li.appendChild(label);
           li.appendChild(actions);
           ul.appendChild(li);
         });
-        if (!state.flow.length) {
-          const empty = document.createElement('p');
-          empty.textContent = 'Add nodes to build a flow.';
-          ul.appendChild(empty);
-          state.selectedIndex = null;
-          state.selectedSchema = null;
-          renderDetails();
-        }
+
+        renderSchema();
       }
 
-      function renderDetails() {
-        const inputSchema = document.getElementById('input-schema');
-        const outputSchema = document.getElementById('output-schema');
-        const meta = document.getElementById('details-meta');
-        const fillButton = document.getElementById('fill-payload');
-        if (!state.selectedSchema) {
-          inputSchema.textContent = 'No node selected.';
-          outputSchema.textContent = 'No node selected.';
-          meta.textContent = 'Select a step in the flow to inspect its schema.';
-          fillButton.disabled = true;
+      function getSelectedNode() {
+        if (state.selectedStep === null) {
+          return null;
+        }
+        const nodeName = state.flow[state.selectedStep];
+        return state.nodes.find(node => node.name === nodeName) || null;
+      }
+
+      function renderSchema() {
+        const schemaEl = document.getElementById('schema');
+        const viewBtn = document.getElementById('view-schema');
+        const populateBtn = document.getElementById('populate-context');
+        const node = getSelectedNode();
+
+        if (!node) {
+          viewBtn.disabled = true;
+          populateBtn.disabled = true;
+          schemaEl.textContent = 'Select a node in the flow to view schema.';
           return;
         }
-        inputSchema.textContent = JSON.stringify(state.selectedSchema.in, null, 2);
-        outputSchema.textContent = JSON.stringify(state.selectedSchema.out, null, 2);
-        meta.textContent = `Showing schema for: ${state.flow[state.selectedIndex]}`;
-        fillButton.disabled = false;
+
+        const schema = node.schema;
+        const hasSchema = Boolean(schema?.in);
+
+        viewBtn.disabled = !hasSchema;
+        populateBtn.disabled = !hasSchema;
+        viewBtn.textContent = state.schemaVisible ? 'Hide selected node schema' : 'Show selected node schema';
+
+        if (!hasSchema) {
+          schemaEl.textContent = `No schema metadata available for node "${node.name}".`;
+          return;
+        }
+
+        if (!state.schemaVisible) {
+          schemaEl.textContent = 'Schema is hidden. Click the button to show the selected node schema.';
+          return;
+        }
+
+        schemaEl.textContent = JSON.stringify(schema, null, 2);
       }
 
-      function displayResult(value) {
-        document.getElementById('result').textContent = JSON.stringify(value, null, 2);
+      function toggleSchema() {
+        state.schemaVisible = !state.schemaVisible;
+        renderSchema();
       }
 
       function sampleValueForSchema(schema) {
-        if (!schema || typeof schema !== 'object') return null;
-        if (schema.const !== undefined) return schema.const;
-        if (schema.default !== undefined) return schema.default;
+        if (!schema || typeof schema !== 'object') {
+          return null;
+        }
+        if (schema.const !== undefined) {
+          return schema.const;
+        }
+        if (schema.default !== undefined) {
+          return schema.default;
+        }
         switch (schema.type) {
-          case 'string': return schema.examples?.[0] ?? schema.format === 'uri' ? 'https://example.com' : 'example';
-          case 'integer': return schema.examples?.[0] ?? 0;
-          case 'number': return schema.examples?.[0] ?? 0.0;
-          case 'boolean': return schema.examples?.[0] ?? false;
-          case 'array': return schema.items ? [sampleValueForSchema(schema.items)] : [];
+          case 'string':
+            return schema.examples?.[0] ?? (schema.format === 'uri' ? 'https://example.com' : 'example');
+          case 'integer':
+          case 'number':
+            return schema.examples?.[0] ?? 0;
+          case 'boolean':
+            return schema.examples?.[0] ?? false;
+          case 'array':
+            return schema.items ? [sampleValueForSchema(schema.items)] : [];
           case 'object': {
             const obj = {};
             const props = schema.properties || {};
@@ -241,45 +253,83 @@
         }
       }
 
-      function setPayloadFromSchema() {
-        if (!state.selectedSchema) return;
-        const sample = sampleValueForSchema(state.selectedSchema.in);
-        document.getElementById('payload').value = JSON.stringify(sample, null, 2);
+      function populateContextFromSchema() {
+        const node = getSelectedNode();
+        if (!node?.schema?.in) {
+          return;
+        }
+        const sample = sampleValueForSchema(node.schema.in);
+        document.getElementById('context').value = JSON.stringify(sample, null, 2);
+      }
+
+      function displayError(message) {
+        const errorEl = document.getElementById('error');
+        errorEl.textContent = message;
+        errorEl.style.display = 'block';
+      }
+
+      function clearError() {
+        const errorEl = document.getElementById('error');
+        errorEl.textContent = '';
+        errorEl.style.display = 'none';
+      }
+
+      function displayResult(value) {
+        document.getElementById('result').textContent = JSON.stringify(value, null, 2);
       }
 
       async function runFlow() {
-        const payloadText = document.getElementById('payload').value;
-        const errorEl = document.getElementById('payload-error');
-        errorEl.style.display = 'none';
-        let payload;
+        clearError();
+
+        const contextText = document.getElementById('context').value;
+        let context;
         try {
-          payload = JSON.parse(payloadText);
+          context = JSON.parse(contextText);
         } catch (error) {
-          errorEl.textContent = 'Invalid JSON payload.';
-          errorEl.style.display = 'block';
+          displayError('Invalid JSON in shared context.');
           return;
         }
+
         if (!state.flow.length) {
-          errorEl.textContent = 'Add at least one node to the flow.';
-          errorEl.style.display = 'block';
+          displayError('Add at least one node to the flow.');
           return;
         }
-        const response = await fetch(apiUrl('/flow/run'), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ nodes: state.flow, payload }),
-        });
-        const body = await response.json();
+
+        let response;
+        try {
+          response = await fetch(apiUrl('/flow/run'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ nodes: state.flow, context }),
+          });
+        } catch (error) {
+          displayError(`Network error: ${error.message}`);
+          return;
+        }
+
+        let body;
+        const contentType = response.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) {
+          try {
+            body = await response.json();
+          } catch (error) {
+            body = { detail: 'Invalid JSON response from server.' };
+          }
+        } else {
+          body = { detail: await response.text() };
+        }
+
         if (!response.ok) {
-          errorEl.textContent = body.detail ? JSON.stringify(body.detail, null, 2) : 'Flow execution failed.';
-          errorEl.style.display = 'block';
+          displayError(body.detail ? JSON.stringify(body.detail, null, 2) : 'Flow execution failed.');
           return;
         }
-        displayResult(body);
+
+        displayResult(body.trace ? body : body.context ?? body);
       }
 
       document.getElementById('run-flow').addEventListener('click', runFlow);
-      document.getElementById('fill-payload').addEventListener('click', setPayloadFromSchema);
+      document.getElementById('view-schema').addEventListener('click', toggleSchema);
+      document.getElementById('populate-context').addEventListener('click', populateContextFromSchema);
       loadNodes();
     </script>
   </body>

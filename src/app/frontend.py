@@ -1,11 +1,14 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, FileResponse
-from pydantic import BaseModel, ValidationError
-from typing import Dict, Any
+from pydantic import BaseModel
+from typing import Any, Dict, List
 from pathlib import Path
 
-from src.lib.example_flow import LenNode, IncNode, LoadDocNode
+from src.lib.flow import discover_nodes, list_nodes_info, get_node, build_flow, Flow
+
+# Discover nodes automatically via the nodes package
+discover_nodes("src.nodes")
 
 app = FastAPI(title="Flow UI")
 
@@ -17,63 +20,47 @@ app.mount("/static", StaticFiles(directory=str(static_dir), html=True), name="st
 async def root():
     return FileResponse(static_dir / "index.html")
 
-# register available nodes here
-_NODES: Dict[str, Any] = {
-    "len": LenNode(),
-    "inc": IncNode(),
-    "load_doc": LoadDocNode(),
-}
-
 
 class FlowRunRequest(BaseModel):
     nodes: list[str]
-    payload: Dict[str, Any] = {}
+    context: Dict[str, Any] = {}
 
 
 @app.get("/nodes")
-def list_nodes():
-    return list(_NODES.keys())
-
-
-@app.get("/schema/{name}")
-def node_schema(name: str):
-    node = _NODES.get(name)
-    if not node:
-        raise HTTPException(status_code=404, detail="node not found")
-    in_schema = node.in_model.model_json_schema()
-    out_schema = node.out_model.model_json_schema()
-    return {"in": in_schema, "out": out_schema}
+def nodes_endpoint():
+    return list_nodes_info()
 
 
 @app.post("/run/{name}")
-def run_node(name: str, payload: Dict[str, Any]):
-    node = _NODES.get(name)
-    if not node:
-        raise HTTPException(status_code=404, detail="node not found")
+def run_node(name: str, context: Dict[str, Any]):
     try:
-        in_obj = node.in_model.model_validate(payload)
-    except ValidationError as e:
-        raise HTTPException(status_code=400, detail=e.errors())
-    out_obj = node.run(in_obj)
-    return JSONResponse(content=out_obj.model_dump())
+        node = get_node(name)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Node '{name}' not found")
+    try:
+        result = node.run(context.copy())
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return JSONResponse(content=result)
 
 
 @app.post("/flow/run")
 def run_flow(body: FlowRunRequest):
-    current = body.payload
-    steps = []
-    for name in body.nodes:
-        node = _NODES.get(name)
-        if not node:
-            raise HTTPException(status_code=404, detail={"node": name, "message": "node not found"})
-        try:
-            in_obj = node.in_model.model_validate(current)
-        except ValidationError as e:
-            raise HTTPException(status_code=400, detail={"node": name, "errors": e.errors()})
-        out_obj = node.run(in_obj)
-        current = out_obj.model_dump()
-        steps.append({"node": name, "output": current})
-    return {"output": current, "steps": steps}
+    print(f"[flow/run] nodes={body.nodes} context={body.context}")
+    try:
+        flow = build_flow(body.nodes)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    try:
+        result, trace = flow.run_with_trace(body.context.copy())
+    except Exception as e:
+        print(f"[flow/run] error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    
+    print(f"[flow/run] result={result}")
+    print(f"[flow/run] trace={trace}")
+    return {"context": result, "trace": trace}
 
 
 if __name__ == "__main__":
