@@ -1,0 +1,5 @@
+Hi, this is a simple text file for testing
+
+New line
+
+Bye

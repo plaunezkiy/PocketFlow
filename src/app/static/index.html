@@ -31,6 +31,19 @@
       .error { color: #b91c1c; margin-top: 0.75rem; }
       .section { margin-bottom: 1.5rem; }
       .section:last-child { margin-bottom: 0; }
+      .flow-canvas { display: flex; flex-direction: column; gap: 0.75rem; padding: 1rem 0; }
+      .flow-node-card { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 12px; padding: 1rem; position: relative; }
+      .flow-node-card.selected { background: #eff6ff; border-color: #3b82f6; }
+      .flow-node-card h4 { margin: 0 0 0.5rem; font-size: 1rem; color: #111827; }
+      .flow-node-schemas { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 0.75rem 0; font-size: 0.85rem; }
+      .flow-node-schema-box { background: white; padding: 0.75rem; border-radius: 8px; border: 1px solid #d1d5db; }
+      .flow-node-schema-box strong { display: block; margin-bottom: 0.4rem; color: #6b7280; }
+      .flow-node-schema-keys { font-family: ui-monospace, SFMono-Regular, monospace; color: #374151; white-space: pre-wrap; word-break: break-word; }
+      .flow-node-actions { display: flex; gap: 0.5rem; margin-top: 0.75rem; }
+      .flow-connector { text-align: center; padding: 0.5rem 0; color: #9ca3af; font-weight: bold; font-size: 1.2rem; }
+      .saved-flow-item { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; padding: 0.75rem; background: #f9fafb; border-radius: 8px; margin-bottom: 0.5rem; }
+      .saved-flow-item span { flex: 1; font-size: 0.95rem; }
+      .saved-flow-item button { padding: 0.4rem 0.6rem; font-size: 0.85rem; }
     </style>
   </head>
   <body>
@@ -55,6 +68,20 @@
             <button id="run-flow" class="primary" style="margin-top:1rem;">Run flow</button>
             <button id="view-schema" class="small" disabled style="margin-top:0.75rem;">Show selected node schema</button>
             <button id="populate-context" class="small" disabled style="margin-top:0.75rem; margin-left:0.5rem;">Prepopulate context</button>
+            
+            <div style="margin-top:1.5rem; border-top:1px solid #e5e7eb; padding-top:1rem;">
+              <h3 style="margin: 0 0 0.75rem; font-size: 1rem;">Save flow</h3>
+              <div style="display:flex; gap:0.5rem;">
+                <input id="save-flow-id" type="text" placeholder="flow name" style="flex:1; padding:0.6rem; border:1px solid #d1d5db; border-radius:10px; font-size:0.95rem;" />
+                <button id="save-flow-btn" class="primary small">Save</button>
+              </div>
+            </div>
+
+            <div style="margin-top:1rem;">
+              <h3 style="margin: 0 0 0.75rem; font-size: 1rem;">Load flow</h3>
+              <ul id="saved-flows" style="list-style:none; padding:0; margin:0;"></ul>
+            </div>
+
             <pre id="schema" style="margin-top:0.75rem; min-height: 8rem; background:#f9fafb; color:#111827; border:1px solid #d1d5db; padding:1rem; border-radius:12px; overflow-x:auto;">Select a node in the flow to view schema.</pre>
           </div>
 
@@ -132,45 +159,103 @@
         renderFlow();
       }
 
+      function getSchemaKeys(schema) {
+        if (!schema?.properties) return '{}';
+        const keys = Object.keys(schema.properties);
+        return keys.length ? keys.join(', ') : '{}';
+      }
+
       function renderFlow() {
-        const ul = document.getElementById('flow');
-        ul.innerHTML = '';
+        const container = document.getElementById('flow');
+        container.innerHTML = '';
+
         if (!state.flow.length) {
           const empty = document.createElement('p');
           empty.textContent = 'Add nodes to build a flow.';
-          ul.appendChild(empty);
+          container.appendChild(empty);
           renderSchema();
           return;
         }
 
-        state.flow.forEach((name, index) => {
-          const li = document.createElement('li');
-          li.className = 'flow-step';
+        const canvas = document.createElement('div');
+        canvas.className = 'flow-canvas';
+
+        state.flow.forEach((nodeName, index) => {
+          const nodeData = state.nodes.find(n => n.name === nodeName);
+          const schema = nodeData?.schema || {};
+
+          // Node card
+          const card = document.createElement('div');
+          card.className = 'flow-node-card';
           if (state.selectedStep === index) {
-            li.classList.add('selected');
+            card.classList.add('selected');
           }
 
-          const label = document.createElement('span');
-          label.textContent = `${index + 1}. ${name}`;
+          const title = document.createElement('h4');
+          title.textContent = `${index + 1}. ${nodeName}`;
+          card.appendChild(title);
 
-          const actions = document.createElement('span');
-          const select = document.createElement('button');
-          select.textContent = 'Select';
-          select.className = 'small';
-          select.onclick = () => selectFlowStep(index);
-          actions.appendChild(select);
+          // Input/Output schema display
+          const schemas = document.createElement('div');
+          schemas.className = 'flow-node-schemas';
 
-          const remove = document.createElement('button');
-          remove.textContent = 'Remove';
-          remove.className = 'small danger';
-          remove.onclick = () => removeNode(index);
-          actions.appendChild(remove);
+          const inBox = document.createElement('div');
+          inBox.className = 'flow-node-schema-box';
+          const inLabel = document.createElement('strong');
+          inLabel.textContent = 'Input';
+          const inKeys = document.createElement('div');
+          inKeys.className = 'flow-node-schema-keys';
+          inKeys.textContent = schema.in ? getSchemaKeys(schema.in) : '(none)';
+          inBox.appendChild(inLabel);
+          inBox.appendChild(inKeys);
 
-          li.appendChild(label);
-          li.appendChild(actions);
-          ul.appendChild(li);
+          const outBox = document.createElement('div');
+          outBox.className = 'flow-node-schema-box';
+          const outLabel = document.createElement('strong');
+          outLabel.textContent = 'Output';
+          const outKeys = document.createElement('div');
+          outKeys.className = 'flow-node-schema-keys';
+          outKeys.textContent = schema.out ? getSchemaKeys(schema.out) : '(none)';
+          outBox.appendChild(outLabel);
+          outBox.appendChild(outKeys);
+
+          schemas.appendChild(inBox);
+          schemas.appendChild(outBox);
+          card.appendChild(schemas);
+
+          // Actions
+          const actions = document.createElement('div');
+          actions.className = 'flow-node-actions';
+
+          const selectBtn = document.createElement('button');
+          selectBtn.textContent = 'Select';
+          selectBtn.className = 'small';
+          selectBtn.onclick = () => selectFlowStep(index);
+
+          const removeBtn = document.createElement('button');
+          removeBtn.textContent = 'Remove';
+          removeBtn.className = 'small danger';
+          removeBtn.onclick = () => removeNode(index);
+
+          actions.appendChild(selectBtn);
+          actions.appendChild(removeBtn);
+          card.appendChild(actions);
+
+          card.style.cursor = 'pointer';
+          card.onclick = () => selectFlowStep(index);
+
+          canvas.appendChild(card);
+
+          // Connector between nodes
+          if (index < state.flow.length - 1) {
+            const connector = document.createElement('div');
+            connector.className = 'flow-connector';
+            connector.textContent = '↓';
+            canvas.appendChild(connector);
+          }
         });
 
+        container.appendChild(canvas);
         renderSchema();
       }
 
@@ -327,10 +412,120 @@
         displayResult(body.trace ? body : body.context ?? body);
       }
 
+      async function saveFlow() {
+        const flowId = document.getElementById('save-flow-id').value.trim();
+        if (!flowId) {
+          displayError('Enter a flow name to save.');
+          return;
+        }
+
+        const contextText = document.getElementById('context').value;
+        let context;
+        try {
+          context = JSON.parse(contextText);
+        } catch (error) {
+          displayError('Invalid JSON in shared context.');
+          return;
+        }
+
+        if (!state.flow.length) {
+          displayError('Add at least one node to save a flow.');
+          return;
+        }
+
+        const response = await fetch(apiUrl('/flows'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: flowId,
+            nodes: state.flow,
+            context: context,
+          }),
+        });
+
+        if (!response.ok) {
+          const body = await response.json();
+          displayError(body.detail || 'Failed to save flow.');
+          return;
+        }
+
+        clearError();
+        document.getElementById('save-flow-id').value = '';
+        loadSavedFlows();
+      }
+
+      async function loadSavedFlows() {
+        const response = await fetch(apiUrl('/flows'));
+        if (!response.ok) {
+          return;
+        }
+
+        const flows = await response.json();
+        const ul = document.getElementById('saved-flows');
+        ul.innerHTML = '';
+
+        flows.forEach(flow => {
+          const item = document.createElement('li');
+          item.className = 'saved-flow-item';
+
+          const label = document.createElement('span');
+          label.textContent = flow.id;
+
+          const load = document.createElement('button');
+          load.textContent = 'Load';
+          load.className = 'small';
+          load.onclick = () => loadFlow(flow.id);
+
+          const del = document.createElement('button');
+          del.textContent = 'Delete';
+          del.className = 'small danger';
+          del.onclick = () => deleteFlow(flow.id);
+
+          item.appendChild(label);
+          item.appendChild(load);
+          item.appendChild(del);
+          ul.appendChild(item);
+        });
+      }
+
+      async function loadFlow(flowId) {
+        const response = await fetch(apiUrl(`/flows/${flowId}`));
+        if (!response.ok) {
+          displayError(`Failed to load flow "${flowId}".`);
+          return;
+        }
+
+        const flow = await response.json();
+        state.flow = flow.nodes;
+        document.getElementById('context').value = JSON.stringify(flow.context, null, 2);
+        clearError();
+        renderFlow();
+      }
+
+      async function deleteFlow(flowId) {
+        if (!confirm(`Delete flow "${flowId}"?`)) {
+          return;
+        }
+
+        const response = await fetch(apiUrl(`/flows/${flowId}`), {
+          method: 'DELETE',
+        });
+
+        if (!response.ok) {
+          displayError(`Failed to delete flow "${flowId}".`);
+          return;
+        }
+
+        clearError();
+        loadSavedFlows();
+      }
+
       document.getElementById('run-flow').addEventListener('click', runFlow);
       document.getElementById('view-schema').addEventListener('click', toggleSchema);
       document.getElementById('populate-context').addEventListener('click', populateContextFromSchema);
+      document.getElementById('save-flow-btn').addEventListener('click', saveFlow);
       loadNodes();
+      loadSavedFlows();
     </script>
   </body>
 </html>

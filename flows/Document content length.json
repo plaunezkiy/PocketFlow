@@ -1,0 +1,10 @@
+{
+  "id": "Document content length",
+  "nodes": [
+    "load_doc",
+    "len"
+  ],
+  "context": {
+    "doc_path": "data/example.txt"
+  }
+}

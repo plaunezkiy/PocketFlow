@@ -6,9 +6,13 @@ from typing import Any, Dict, List
 from pathlib import Path
 
 from src.lib.flow import discover_nodes, list_nodes_info, get_node, build_flow, Flow
+from src.lib.store import FlowStore
 
 # Discover nodes automatically via the nodes package
 discover_nodes("src.nodes")
+
+# Initialize flow persistence
+store = FlowStore(storage_dir="flows")
 
 app = FastAPI(title="Flow UI")
 
@@ -22,6 +26,12 @@ async def root():
 
 
 class FlowRunRequest(BaseModel):
+    nodes: list[str]
+    context: Dict[str, Any] = {}
+
+
+class SaveFlowRequest(BaseModel):
+    id: str
     nodes: list[str]
     context: Dict[str, Any] = {}
 
@@ -61,6 +71,36 @@ def run_flow(body: FlowRunRequest):
     print(f"[flow/run] result={result}")
     print(f"[flow/run] trace={trace}")
     return {"context": result, "trace": trace}
+
+
+@app.get("/flows")
+def list_flows():
+    """List all saved flows."""
+    return store.list()
+
+
+@app.get("/flows/{flow_id}")
+def get_flow(flow_id: str):
+    """Load a saved flow by ID."""
+    flow = store.load(flow_id)
+    if not flow:
+        raise HTTPException(status_code=404, detail=f"Flow '{flow_id}' not found")
+    return flow
+
+
+@app.post("/flows")
+def save_flow(body: SaveFlowRequest):
+    """Save a flow definition."""
+    flow = store.save(body.id, body.nodes, body.context)
+    return flow
+
+
+@app.delete("/flows/{flow_id}")
+def delete_flow(flow_id: str):
+    """Delete a saved flow."""
+    if not store.delete(flow_id):
+        raise HTTPException(status_code=404, detail=f"Flow '{flow_id}' not found")
+    return {"deleted": flow_id}
 
 
 if __name__ == "__main__":
